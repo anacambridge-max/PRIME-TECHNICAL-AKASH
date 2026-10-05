@@ -1,1 +1,31 @@
-let data=[];const $=x=>document.getElementById(x);function n(v){return v==null||isNaN(v)?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:2})}function cls(s){return s==='BUY'?'buy':s==='SELL'?'sell':s.startsWith('FAKE')?'fake':''}function render(d){data=d.results||[];$('scanned').textContent=d.scanned||0;$('buy').textContent=data.filter(x=>x.direction==='BUY').length;$('sell').textContent=data.filter(x=>x.direction==='SELL').length;$('top').textContent=data[0]?.score??'—';$('updated').textContent='Updated '+new Date(d.updatedAt).toLocaleTimeString('en-IN');const m=+$('min').value||0;$('rows').innerHTML=data.filter(x=>x.score==null||x.score>=m).map(x=>'<tr><td><b>'+x.symbol+'</b></td><td><span class="sig '+cls(x.direction)+'">'+x.direction+'</span></td><td>'+n(x.score)+'</td><td>'+x.setup+' / '+x.levelName+'</td><td>'+n(x.ltp)+'</td><td>'+n(x.pdh)+'</td><td>'+n(x.pdl)+'</td><td>'+n(x.volMultiple)+'×</td><td>'+n(x.ema20)+'</td><td>'+n(x.yearHigh)+' / '+n(x.yearLow)+'</td><td>'+n(x.monthHigh)+' / '+n(x.monthLow)+'</td><td>'+n(x.entry)+'</td><td>'+n(x.sl)+'</td><td>'+n(x.target1)+'</td><td>'+n(x.target2)+'</td></tr>').join('')||'<tr><td colspan="15">No setups.</td></tr>'}async function scan(){try{const r=await fetch('/api/scan?ts='+Date.now());const d=await r.json();if(!r.ok)throw Error(d.error||'Scan failed');$('status').textContent='UPSTOX CONNECTED';$('status').style.color='var(--green)';render(d)}catch(e){alert(e.message)}}$('min').oninput=()=>render({results:data,scanned:data.length,updatedAt:new Date().toISOString()});if(location.search.includes('connected=1'))scan();
+let data=[];let timer=null;const $=x=>document.getElementById(x);
+function n(v){return v==null||isNaN(v)?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:2})}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function cls(s){return s==='BUY'?'buy':s==='SELL'?'sell':s.startsWith('FAKE')?'fake':''}
+function istNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}))}
+function inWindow(){const d=istNow(),m=d.getHours()*60+d.getMinutes();return m>=555&&m<600}
+function signalTime(ts){return new Date(ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}
+function render(d){
+  data=d.results||[];
+  $('scanned').textContent=d.scanned||0;
+  $('buy').textContent=data.filter(x=>x.direction==='BUY').length;
+  $('sell').textContent=data.filter(x=>x.direction==='SELL').length;
+  $('top').textContent=data[0]?.score??'—';
+  $('updated').textContent=d.active===false?'SCANNER OFF • ACTIVE 09:15–10:00 IST':'Updated '+new Date(d.updatedAt).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'});
+  const m=+$('min').value||0;
+  $('rows').innerHTML=data.filter(x=>x.score==null||x.score>=m).map(x=>'<tr><td><b>'+esc(x.symbol)+'</b></td><td><span class="sig '+cls(x.direction)+'">'+esc(x.direction)+'</span></td><td>'+n(x.score)+'</td><td>'+esc(x.setup)+' / '+esc(x.levelName)+'</td><td>'+n(x.ltp)+'</td><td>'+n(x.pdh)+'</td><td>'+n(x.pdl)+'</td><td>'+n(x.volMultiple)+'×</td><td>'+n(x.ema20)+'</td><td>'+n(x.yearHigh)+' / '+n(x.yearLow)+'</td><td>'+n(x.monthHigh)+' / '+n(x.monthLow)+'</td><td>'+n(x.entry)+'</td><td>'+n(x.sl)+'</td><td>'+n(x.target1)+'</td><td>'+n(x.target2)+'</td><td>'+signalTime(x.signalTimestamp)+(x.newsMatched?' • NEWS':'')+'</td></tr>').join('')||'<tr><td colspan="16">No 09:15–10:00 setups.</td></tr>';
+}
+async function scan(){
+  if(!inWindow()){render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()});return}
+  try{
+    const r=await fetch('/api/scan?ts='+Date.now());
+    const d=await r.json();
+    if(!r.ok)throw Error(d.error||'Scan failed');
+    $('status').textContent='UPSTOX CONNECTED • LIVE';
+    $('status').style.color='var(--green)';
+    render(d);
+  }catch(e){console.error(e);$('status').textContent='SCAN ERROR'}
+}
+function startLive(){clearInterval(timer);scan();timer=setInterval(()=>{if(inWindow())scan();else{clearInterval(timer);render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()})}},180000)}
+$('min').oninput=()=>render({results:data,scanned:data.length,updatedAt:new Date().toISOString(),active:true});
+if(location.search.includes('connected=1'))startLive();
