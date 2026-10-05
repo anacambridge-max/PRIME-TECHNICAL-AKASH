@@ -1,4 +1,5 @@
 const { json, token } = require("./_lib");
+const { gunzipSync } = require("node:zlib");
 
 const U = "https://api.upstox.com";
 const INSTRUMENTS = "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz";
@@ -18,6 +19,26 @@ async function get(url, tokenValue, timeout=9000) {
     try { d = t ? JSON.parse(t) : {}; } catch { d = { raw:t }; }
     if (!r.ok) throw Error(d?.errors?.[0]?.message || d?.message || "HTTP " + r.status);
     return d;
+  } finally { clearTimeout(tm); }
+}
+
+async function getInstrumentMaster() {
+  const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 20000);
+  try {
+    const r = await fetch(INSTRUMENTS, {
+      signal: ac.signal,
+      headers: { Accept: "application/gzip, application/json" }
+    });
+    if (!r.ok) throw Error("Instrument master HTTP " + r.status);
+    const buf = Buffer.from(await r.arrayBuffer());
+    let raw;
+    if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+      raw = gunzipSync(buf).toString("utf8");
+    } else {
+      raw = buf.toString("utf8");
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : (Array.isArray(parsed.data) ? parsed.data : []);
   } finally { clearTimeout(tm); }
 }
 
@@ -48,8 +69,7 @@ function ds(ts){return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kolkata",
 function clean(s){return String(s||"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();}
 
 async function universe(){
-  const d=await get(INSTRUMENTS,null,15000);
-  const a=Array.isArray(d)?d:(d.data||[]);
+  const a=await getInstrumentMaster();
   const now=Date.now(), m=new Map();
   for(const x of a){
     if(x.segment!=="NSE_FO"||x.instrument_type!=="FUT"||x.underlying_type!=="EQUITY"||!x.underlying_key)continue;
@@ -57,15 +77,17 @@ async function universe(){
     const old=m.get(x.underlying_symbol);
     if(!old||+old.expiry>ex)m.set(x.underlying_symbol,x);
   }
-  return [...m.values()].map(x=>({symbol:x.underlying_symbol,name:x.name||x.underlying_symbol,key:x.underlying_key}));
+  return [...m.values()].map(x=>({symbol:x.underlying_symbol,name:x.name||x.underlying_symbol,key:x.underlying_key})).filter(x=>x.symbol&&x.key);
 }
 
 async function quotes(items,t){
-  const keys=items.map(x=>x.key).join(",");
-  const d=await get(U+"/v3/market-quote/quotes?instrument_key="+encodeURIComponent(keys),t);
   const out={};
-  for(const [k,q] of Object.entries(d.data||{})){
-    out[q.symbol||k.split(":").pop()]={ltp:+q.last_price||+q.ohlc?.close||0,prev:+q.prev_close_price||0,vol:+q.ohlc?.volume||0,yh:+q.year_high||0,yl:+q.year_low||0};
+  for(let i=0;i<items.length;i+=450){
+    const keys=items.slice(i,i+450).map(x=>x.key).join(",");
+    const d=await get(U+"/v3/market-quote/quotes?instrument_key="+encodeURIComponent(keys),t);
+    for(const [k,q] of Object.entries(d.data||{})){
+      out[q.symbol||k.split(":").pop()]={ltp:+q.last_price||+q.ohlc?.close||0,prev:+q.prev_close_price||0,vol:+q.ohlc?.volume||0,yh:+q.year_high||0,yl:+q.year_low||0};
+    }
   }
   return out;
 }
@@ -101,7 +123,7 @@ function score(item,q,c,d,m,buzz,today){
   const levScore=level==="ATH"||level==="ATL"?15:level==="52W HIGH"||level==="52W LOW"?12:level==="MONTH HIGH"||level==="MONTH LOW"?9:level==="YH"||level==="YL"?3:0;
   const body=(x.h-x.l)>0?Math.abs(x.c-x.o)/(x.h-x.l):0;
   const closePos=dir==="BUY"?((x.c-x.l)/(x.h-x.l||1)):((x.h-x.c)/(x.h-x.l||1));
-  let sc=Math.min(100,volScore+levScore+Math.min(15,body*15)+closePos*10+Math.min(15,Math.abs(x.c-e)/e*1500)+ (rm>=2?10:rm>=1.75?9:rm>=1.5?8:rm>=1.3?6:rm>=1.1?3:0)+(buzz?8:0)+(vm>=4?5:0));
+  let sc=Math.min(100,volScore+levScore+Math.min(15,body*15)+closePos*10+Math.min(15,Math.abs(x.c-e)/e*1500)+(rm>=2?10:rm>=1.75?9:rm>=1.5?8:rm>=1.3?6:rm>=1.1?3:0)+(buzz?8:0)+(vm>=4?5:0));
   let sl=NaN,t1=NaN,t2=NaN;
   if(dir==="BUY"){sl=fakeBuy?pdl:x.l;if(sl<x.c&&a){const r=x.c-sl;t1=x.c+r*1.5;t2=x.c+r*3;}}
   if(dir==="SELL"){sl=fakeSell?pdh:x.h;if(sl>x.c&&a){const r=sl-x.c;t1=x.c-r*1.5;t2=x.c-r*3;}}
