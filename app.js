@@ -4,7 +4,8 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&l
 function cls(s){return s==='BUY'?'buy':s==='SELL'?'sell':s.startsWith('FAKE')?'fake':''}
 function istNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}))}
 function inWindow(){const d=istNow(),m=d.getHours()*60+d.getMinutes();return m>=555&&m<600}
-function signalTime(ts){return new Date(ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}
+function signalTime(ts){return new Date(ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false)}
+function setConnected(v){$('status').textContent=v?'UPSTOX CONNECTED':'UPSTOX NOT CONNECTED';$('status').style.color=v?'var(--green)':''}
 function render(d){
   data=d.results||[];
   $('scanned').textContent=d.scanned||0;
@@ -18,14 +19,29 @@ function render(d){
 async function scan(){
   if(!inWindow()){render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()});return}
   try{
-    const r=await fetch('/api/scan?ts='+Date.now());
+    const r=await fetch('/api/scan?ts='+Date.now(),{cache:'no-store'});
     const d=await r.json();
     if(!r.ok)throw Error(d.error||'Scan failed');
-    $('status').textContent='UPSTOX CONNECTED • LIVE';
-    $('status').style.color='var(--green)';
+    setConnected(true);
     render(d);
-  }catch(e){console.error(e);$('status').textContent='SCAN ERROR'}
+  }catch(e){console.error(e);setConnected(false);$('status').textContent='UPSTOX CONNECTION ERROR'}
 }
-function startLive(){clearInterval(timer);scan();timer=setInterval(()=>{if(inWindow())scan();else{clearInterval(timer);render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()})}},180000)}
+function startLive(){
+  clearInterval(timer);
+  if(!inWindow()){render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()});return}
+  scan();
+  timer=setInterval(()=>{if(inWindow())scan();else{clearInterval(timer);render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()})}},180000)
+}
+async function checkConnection(){
+  try{
+    const r=await fetch('/api/upstox/status?ts='+Date.now(),{cache:'no-store'});
+    const d=await r.json();
+    setConnected(!!d.connected);
+    if(d.connected&&location.search.includes('connected=1')){
+      history.replaceState({},document.title,location.pathname);
+      startLive();
+    }
+  }catch(e){setConnected(false)}
+}
 $('min').oninput=()=>render({results:data,scanned:data.length,updatedAt:new Date().toISOString(),active:true});
-if(location.search.includes('connected=1'))startLive();
+checkConnection();
