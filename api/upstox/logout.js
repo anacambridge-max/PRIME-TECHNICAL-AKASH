@@ -1,0 +1,1 @@
+const {json}=require("../_lib");module.exports=(req,res)=>{res.setHeader("Set-Cookie","upstox_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");json(res,200,{ok:true})};
