@@ -53,7 +53,7 @@ module.exports=async(req,res)=>{
     const d=await r.json();
     if(!r.ok||!d.access_token)return json(res,400,{error:d?.errors?.[0]?.message||d?.message||"Token exchange failed"});
 
-    res.setHeader("Set-Cookie","upstox_session="+encodeURIComponent(seal(d.access_token))+"; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400");
+    res.setHeader("Set-Cookie","upstox_session="+encodeURIComponent(seal(d.access_token))+"; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=86400");
     return successPage(res);
   }catch(e){
     return json(res,500,{error:e.message});
