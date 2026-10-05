@@ -6,6 +6,8 @@ const INSTRUMENTS = "https://assets.upstox.com/market-quote/instruments/exchange
 const BUZZ = "https://www.moneycontrol.com/news/tags/buzzing-stocks.html";
 const MAX_DETAIL = 70;
 const CONCURRENCY = 16;
+const START_MIN = 555;
+const END_MIN = 600;
 
 async function get(url, tokenValue, timeout=9000) {
   const ac = new AbortController(), tm = setTimeout(() => ac.abort(), timeout);
@@ -67,6 +69,26 @@ function ema(a,n){ if(!a.length)return NaN; const k=2/(n+1); let e=a[0]; for(let
 function atr(c,n=14){ if(c.length<n+1)return NaN; const x=[]; for(let i=1;i<c.length;i++)x.push(Math.max(c[i].h-c[i].l,Math.abs(c[i].h-c[i-1].c),Math.abs(c[i].l-c[i-1].c))); return sma(x,n); }
 function ds(ts){return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Kolkata",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(ts));}
 function clean(s){return String(s||"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();}
+function istMinutes(ts=Date.now()){
+  const p=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Kolkata",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(ts));
+  return +(p.find(x=>x.type==="hour")?.value||0)*60 + +(p.find(x=>x.type==="minute")?.value||0);
+}
+function morningWindow(){const m=istMinutes();return m>=START_MIN&&m<END_MIN;}
+function signalInWindow(ts){const m=istMinutes(ts);return m>=START_MIN&&m<END_MIN;}
+function moneycontrolNews(html,item){
+  const sym=clean(item.symbol), name=clean(item.name);
+  const re=/<a[^>]+href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/gi;
+  let m;
+  while((m=re.exec(html))){
+    const title=String(m[2]||"").replace(/<[^>]+>/g," ").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&#39;/g,"'").replace(/&quot;/gi,'"').replace(/\\s+/g," ").trim();
+    if(title.length<15||title.length>250)continue;
+    const hay=clean(title);
+    if((sym&&hay.includes(sym))||(name&&hay.includes(name))){
+      return {title,url:m[1].startsWith("http")?m[1]:"https://www.moneycontrol.com"+m[1]};
+    }
+  }
+  return null;
+}
 
 async function universe(){
   const a=await getInstrumentMaster();
@@ -98,10 +120,11 @@ async function pool(a,n,fn){
   await Promise.all(Array.from({length:Math.min(n,a.length)},w)); return out;
 }
 
-function score(item,q,c,d,m,buzz,today){
-  if(!c||c.length<25||!d.length)return null;
-  const conf=c.filter(x=>x.ts+180000<=Date.now()); if(conf.length<25)return null;
+function score(item,q,c,d,m,buzz,today,news){
+  if(!c||c.length<20||!d.length)return null;
+  const conf=c.filter(x=>x.ts+180000<=Date.now()); if(conf.length<20)return null;
   const x=conf[conf.length-1], p=conf[conf.length-2];
+  if(!signalInWindow(x.ts))return null;
   const vs=conf.map(z=>z.v), rs=conf.map(z=>z.h-z.l), cs=conf.map(z=>z.c);
   const av=sma(vs,20), vm=av?x.v/av:0, ar=sma(rs,10), rm=ar?(x.h-x.l)/ar:0, e=ema(cs,20), a=atr(conf);
   const strongBull=x.c>x.o && x.h>x.l && Math.abs(x.c-x.o)/(x.h-x.l)>=.5 && (x.c-x.l)/(x.h-x.l)>=.6;
@@ -127,28 +150,38 @@ function score(item,q,c,d,m,buzz,today){
   let sl=NaN,t1=NaN,t2=NaN;
   if(dir==="BUY"){sl=fakeBuy?pdl:x.l;if(sl<x.c&&a){const r=x.c-sl;t1=x.c+r*1.5;t2=x.c+r*3;}}
   if(dir==="SELL"){sl=fakeSell?pdh:x.h;if(sl>x.c&&a){const r=sl-x.c;t1=x.c-r*1.5;t2=x.c-r*3;}}
-  return {symbol:item.symbol,signal:dir,direction:dir,score:Math.round(sc),grade:sc>=90?"A+":sc>=80?"A":sc>=70?"STRONG":sc>=60?"GOOD":"WATCH",setup:fakeBuy?"SETUP 2 — FAKE YL":fakeSell?"SETUP 2 — FAKE YH":buy?"SETUP 1 — PDH BREAK":sell?"SETUP 1 — PDL BREAK":buzz?"BUZZING + WATCH":"LEVEL WATCH",levelName:level,ltp:x.c,pdh,pdl,volMultiple:vm,extremeVolume:vm>=4,ema20:e,yearHigh:yh,yearLow:yl,monthHigh:mh,monthLow:ml,ath,atl,entry:(dir==="BUY"||dir==="SELL")?x.c:NaN,sl,t1,t2,target1:t1,target2:t2,buzz,changePct:q.prev?((x.c/q.prev)-1)*100:0,candleTime:new Date(x.ts).toISOString(),notes:[vm>=4?"EXTREME VOLUME":vm>=2?"2x+ VOLUME":"",buzz?"MONEYCONTROL BUZZ":"",buy?"PDH/YH CROSS":sell?"PDL/YL CROSS":"",near(yh)?"NEAR 52W HIGH":"",near(yl)?"NEAR 52W LOW":""].filter(Boolean).join(" • ")};
+  return {symbol:item.symbol,signal:dir,direction:dir,score:Math.round(sc),grade:sc>=90?"A+":sc>=80?"A":sc>=70?"STRONG":sc>=60?"GOOD":"WATCH",setup:fakeBuy?"SETUP 2 — FAKE YL":fakeSell?"SETUP 2 — FAKE YH":buy?"SETUP 1 — PDH BREAK":sell?"SETUP 1 — PDL BREAK":buzz?"BUZZING + WATCH":"LEVEL WATCH",levelName:level,ltp:x.c,pdh,pdl,volMultiple:vm,extremeVolume:vm>=4,ema20:e,yearHigh:yh,yearLow:yl,monthHigh:mh,monthLow:ml,ath,atl,entry:(dir==="BUY"||dir==="SELL")?x.c:NaN,sl,t1,t2,target1:t1,target2:t2,buzz,newsMatched:!!news,newsHeadline:news?.title||"",newsUrl:news?.url||"",changePct:q.prev?((x.c/q.prev)-1)*100:0,candleTime:new Date(x.ts).toISOString(),signalTimestamp:new Date(x.ts).toISOString(),notes:[vm>=4?"EXTREME VOLUME":vm>=2?"2x+ VOLUME":"",news?"MONEYCONTROL NEWS":"",buy?"PDH/YH CROSS":sell?"PDL/YL CROSS":"",near(yh)?"NEAR 52W HIGH":"",near(yl)?"NEAR 52W LOW":""].filter(Boolean).join(" • ")};
 }
 
 module.exports=async(req,res)=>{
   const t=token(req); if(!t)return json(res,401,{error:"Not connected to Upstox. Click CONNECT UPSTOX."});
   const started=Date.now();
   try{
-    const today=todayIST(), u=await universe(); if(!u.length)throw Error("No NSE F&O equity universe returned by Upstox.");
+    const today=todayIST();
+    if(!morningWindow()) return json(res,200,{ok:true,active:false,window:"09:15-10:00 IST",updatedAt:new Date().toISOString(),timeframe:"3m",scanned:0,buy:0,sell:0,results:[],message:"Scanner is active only from 09:15 to 10:00 IST."});
+    const u=await universe(); if(!u.length)throw Error("No NSE F&O equity universe returned by Upstox.");
     const [qs,buzzHtml]=await Promise.all([quotes(u,t),text(BUZZ).catch(()=>"" )]);
-    const buzzText=clean(buzzHtml), buzzSet=new Set();
-    for(const x of u){const sym=clean(x.symbol);if(sym&&new RegExp("\\b"+sym+"\\b").test(buzzText))buzzSet.add(x.symbol);}
+    const buzzText=clean(buzzHtml), buzzSet=new Set(), newsMap=new Map();
+    for(const x of u){
+      const sym=clean(x.symbol);
+      if(sym&&buzzText.includes(sym))buzzSet.add(x.symbol);
+      const n=moneycontrolNews(buzzHtml,x);
+      if(n)newsMap.set(x.symbol,n);
+    }
     const ranked=u.map(item=>{const q=qs[item.symbol]||{};const ch=q.prev?Math.abs(q.ltp/q.prev-1):0;const prox=q.yh&&q.yl&&q.ltp?Math.min(Math.abs(q.ltp-q.yh)/q.yh,Math.abs(q.ltp-q.yl)/q.yl):1;return {item,q,rank:ch*100+(buzzSet.has(item.symbol)?12:0)+Math.max(0,10-prox*100)}}).sort((a,b)=>b.rank-a.rank).slice(0,MAX_DETAIL);
     const df=dateMinus(today,40), mf=dateMinus(today,3650);
     const raw=await pool(ranked,CONCURRENCY,async z=>{
-      const [ic,dc,mc]=await Promise.all([
+      const hist3From=dateMinus(today,7);
+      const [ic,h3,dc,mc]=await Promise.all([
         get(U+"/v3/historical-candle/intraday/"+encodeURIComponent(z.item.key)+"/minutes/3",t),
+        get(U+"/v3/historical-candle/"+encodeURIComponent(z.item.key)+"/minutes/3/"+today+"/"+hist3From,t),
         get(U+"/v3/historical-candle/"+encodeURIComponent(z.item.key)+"/days/1/"+today+"/"+df,t),
         get(U+"/v3/historical-candle/"+encodeURIComponent(z.item.key)+"/months/1/"+today+"/"+mf,t)
       ]);
-      return score(z.item,z.q,rows(ic),rows(dc),rows(mc),buzzSet.has(z.item.symbol),today);
+      const c3=[...rows(h3),...rows(ic)].sort((a,b)=>a.ts-b.ts).filter((x,i,a)=>i===0||x.ts!==a[i-1].ts);
+      return score(z.item,z.q,c3,rows(dc),rows(mc),buzzSet.has(z.item.symbol),today,newsMap.get(z.item.symbol));
     });
     const results=raw.filter(Boolean).sort((a,b)=>(b.direction==="BUY"||b.direction==="SELL"?1:0)-(a.direction==="BUY"||a.direction==="SELL"?1:0)||b.score-a.score).slice(0,100);
-    return json(res,200,{ok:true,updatedAt:new Date().toISOString(),timeframe:"3m",scanned:u.length,detailedScanned:ranked.length,candidatesWithData:raw.filter(Boolean).length,buzzCount:buzzSet.size,buy:results.filter(x=>x.direction==="BUY").length,sell:results.filter(x=>x.direction==="SELL").length,elapsedMs:Date.now()-started,results});
+    return json(res,200,{ok:true,updatedAt:new Date().toISOString(),active:true,window:"09:15-10:00 IST",timeframe:"3m",scanned:u.length,detailedScanned:ranked.length,candidatesWithData:raw.filter(Boolean).length,buzzCount:buzzSet.size,newsCount:newsMap.size,buy:results.filter(x=>x.direction==="BUY").length,sell:results.filter(x=>x.direction==="SELL").length,elapsedMs:Date.now()-started,results});
   }catch(e){return json(res,500,{error:e.message||"Scanner failed"});}
 };
