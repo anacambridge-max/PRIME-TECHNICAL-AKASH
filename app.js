@@ -4,7 +4,20 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&l
 function cls(s){return s==='BUY'?'buy':s==='SELL'?'sell':s.startsWith('FAKE')?'fake':''}
 function istNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}))}
 function inWindow(){const d=istNow(),m=d.getHours()*60+d.getMinutes();return m>=555&&m<600}
-function signalTime(ts){return new Date(ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false)}
+function signalTime(ts){return new Date(ts).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}
+function sessionToken(){try{return sessionStorage.getItem('upstox_session')||localStorage.getItem('upstox_session')||''}catch(e){return ''}}
+function authHeaders(){const t=sessionToken();return t?{Authorization:'Bearer '+t}:{}}
+function clearSession(){try{sessionStorage.removeItem('upstox_session');localStorage.removeItem('upstox_session')}catch(e){}}
+function captureFragmentSession(){
+  const h=location.hash||'';
+  const prefix='#upstox_session=';
+  if(!h.startsWith(prefix))return false;
+  const token=decodeURIComponent(h.slice(prefix.length));
+  if(!token)return false;
+  try{sessionStorage.setItem('upstox_session',token);localStorage.setItem('upstox_session',token)}catch(e){}
+  history.replaceState({},document.title,location.pathname+location.search);
+  return true;
+}
 function setConnected(v){$('status').textContent=v?'UPSTOX CONNECTED':'UPSTOX NOT CONNECTED';$('status').style.color=v?'var(--green)':''}
 function render(d){
   data=d.results||[];
@@ -19,11 +32,11 @@ function render(d){
 async function scan(){
   if(!inWindow()){render({results:[],scanned:0,active:false,updatedAt:new Date().toISOString()});return}
   try{
-    const r=await fetch('/api/scan?ts='+Date.now(),{cache:'no-store'});
+    const r=await fetch('/api/scan?ts='+Date.now(),{cache:'no-store',headers:authHeaders()});
     const d=await r.json();
     if(!r.ok)throw Error(d.error||'Scan failed');
-    setConnected(true);
-    render(d);
+    if(d.authenticated===false){clearSession();setConnected(false);throw Error('Upstox session expired')}
+    setConnected(true);render(d);
   }catch(e){console.error(e);setConnected(false);$('status').textContent='UPSTOX CONNECTION ERROR'}
 }
 function startLive(){
@@ -34,10 +47,12 @@ function startLive(){
 }
 async function checkConnection(){
   try{
-    const r=await fetch('/api/upstox/status?ts='+Date.now(),{cache:'no-store'});
+    const captured=captureFragmentSession();
+    const r=await fetch('/api/upstox/status?ts='+Date.now(),{cache:'no-store',headers:authHeaders()});
     const d=await r.json();
+    if(!d.connected&&!sessionToken())clearSession();
     setConnected(!!d.connected);
-    if(d.connected&&location.search.includes('connected=1')){
+    if(d.connected&&(captured||location.search.includes('connected=1'))){
       history.replaceState({},document.title,location.pathname);
       startLive();
     }
